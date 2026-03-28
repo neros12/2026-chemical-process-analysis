@@ -1,8 +1,8 @@
 import numpy as np
 
 
-Array1X3 = np.ndarray[tuple[3], np.dtype[np.float64]]
-Array3X3 = np.ndarray[tuple[3, 3], np.dtype[np.float64]]
+Array1X3 = np.ndarray[tuple[int], np.dtype[np.float64]]
+Array3X3 = np.ndarray[tuple[int, int], np.dtype[np.float64]]
 
 
 def LU_decompose(A: Array3X3) -> tuple[Array3X3, Array3X3]:
@@ -16,11 +16,12 @@ def LU_decompose(A: Array3X3) -> tuple[Array3X3, Array3X3]:
             L[i, j] = factor
             U[i, j:] -= factor * U[j, j:]
 
-    return L, U  # type: ignore
+    return L, U
 
 
 def forward_subsitution(L: Array3X3, B: Array1X3) -> Array1X3:
     D = np.zeros(len(B))
+
     for i in range(len(B)):
         d = 0.0
         for j in range(i):
@@ -28,11 +29,12 @@ def forward_subsitution(L: Array3X3, B: Array1X3) -> Array1X3:
 
         D[i] = B[i] - d
 
-    return D  # type:ignore
+    return D
 
 
 def backward_subsitution(U: Array3X3, D: Array1X3) -> Array1X3:
     X = np.zeros(len(D))
+
     for i in range(len(D) - 1, -1, -1):
         x = 0.0
         for j in range(i + 1, len(D)):
@@ -40,7 +42,7 @@ def backward_subsitution(U: Array3X3, D: Array1X3) -> Array1X3:
 
         X[i] = (D[i] - x) / U[i, i]
 
-    return X  # type:ignore
+    return X
 
 
 if __name__ == "__main__":

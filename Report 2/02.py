@@ -93,83 +93,67 @@ def runge_kutta_with_shooting(
         # Check
         if abs(ys0[-1] - yb) <= tol:
             break
-        else:
-            u2 = u1 - (ys1[-1]) * ((u1 - u0) / (ys1[-1] - ys0[-1]))
 
-            # Update
-            u0 = u1
-            u1 = u2
+        u2 = u1 - (ys1[-1]) * ((u1 - u0) / (ys1[-1] - ys0[-1]))
+
+        # Update
+        u0 = u1
+        u1 = u2
     else:
-        raise RuntimeError("수렴하지 않았습니다.")
+        raise RuntimeError(
+            f"ERROR:: 최대 iteration({max_iter}) 안에 수렴하지 못했습니다!"
+        )
 
     return xs0, ys0, zs0
 
 
-def thomas_algorithm(lower, diag, upper, rhs):
-    n = len(diag)
-
-    # 복사해서 원본 보존
-    a = lower.astype(float).copy()
-    b = diag.astype(float).copy()
-    c = upper.astype(float).copy()
-    d = rhs.astype(float).copy()
-
-    # forward elimination
-    for i in range(1, n):
-        w = a[i - 1] / b[i - 1]
-        b[i] = b[i] - w * c[i - 1]
-        d[i] = d[i] - w * d[i - 1]
-
-    # backward substitution
-    x = np.zeros(n)
-    x[-1] = d[-1] / b[-1]
-
-    for i in range(n - 2, -1, -1):
-        x[i] = (d[i] - c[i] * x[i + 1]) / b[i]
-
-    return x
-
-
-def solve_bvp_fdm_tridiag(a, b, ya, yb, m):
+def tridiagonal_matrix_method(a: float, b: float, ya: float, yb: float, m: int):
+    """
+    d2y/dx2 + Ay = B
+    A = 1/4
+    B = 8
+    """
+    A = 1 / 4
+    B = 8
     h = (b - a) / m
-    x = np.linspace(a, b, m + 1)
-
     n = m - 1
 
-    lower = np.ones(n - 1)
-    diag = np.full(n, -2.0 + h**2 / 4.0)
-    upper = np.ones(n - 1)
-    rhs = np.full(n, 8.0 * h**2)
+    alpha = -2 + A * h * h
+    beta = B * h * h
+    J = (
+        np.diag(np.full(n, alpha))
+        + np.diag(np.ones(n - 1), k=1)
+        + np.diag(np.ones(n - 1), k=-1)
+    )
+    R = np.full((n, 1), beta)
+    R[0] -= ya
+    R[-1] -= yb
 
-    # 경계조건 반영
-    rhs[0] -= ya
-    rhs[-1] -= yb
+    ys = np.linalg.inv(J) @ R
 
-    y_inner = thomas_algorithm(lower, diag, upper, rhs)
+    ys = ys.flatten().tolist()
+    ys = [ya, *ys, yb]
+    xs = np.linspace(a, b, m + 1)
 
-    y = np.zeros(m + 1)
-    y[0] = ya
-    y[-1] = yb
-    y[1:-1] = y_inner
-
-    return x, y
+    return xs, ys
 
 
 if __name__ == "__main__":
-    y0 = 0.0
+    a = 0.0
     b = 10.0
+    ya = 0.0
     yb = 0.0
     u0 = 1
     u1 = 2
 
-    xs, ys, zs = runge_kutta_with_shooting(y0, b, yb, u0, u1)
-    x, y = solve_bvp_fdm_tridiag(0.0, b, y0, yb, 100)
+    rk_xs, rk_ys, rk_zs = runge_kutta_with_shooting(ya, b, yb, u0, u1)
+    tm_xs, tm_ys = tridiagonal_matrix_method(a, b, ya, yb, 100)
 
-    plt.plot(xs, ys, c="black", lw=1, label="y(x)")
-    # plt.plot(x, y, c="dimgray", ls="--", lw=1, label="z = y'(x)")
+    plt.plot(rk_xs, rk_ys, c="red", lw=1.5, zorder=2, label="Runge-Kutta with Shooting")
+    plt.plot(tm_xs, tm_ys, c="blue", lw=4, zorder=1, label="Tridiagonal Matrix Method")
     plt.xlabel("x")
-    plt.xlim(xs[0], xs[-1])
-    plt.ylim(min(ys), max(ys) + 5)
+    plt.xlim(rk_xs[0], rk_xs[-1])
+    plt.ylim(min(rk_ys), max(rk_ys) + 5)
     plt.tick_params(direction="in")
     plt.legend()
     plt.show()

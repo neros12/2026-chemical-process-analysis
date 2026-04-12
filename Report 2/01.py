@@ -1,11 +1,17 @@
 import matplotlib.pyplot as plt
 
 
-def f(x, y, z):
+def f(x: float, y: float, z: float):
+    """
+    z = y'
+    """
     return z
 
 
-def g(x, y, z):
+def g(x: float, y: float, z: float):
+    """
+    y" = -2z -4y
+    """
     return -2 * z - 4 * y
 
 
@@ -18,11 +24,9 @@ def runge_kutta_4th_order_method(y0: float, z0: float, h: float, n: int):
     y_old = y0
     z_old = z0
     for _ in range(n):
-        # k1
         k1y = f(x_old, y_old, z_old)
         k1z = g(x_old, y_old, z_old)
 
-        # k2
         k2y = f(
             x_old + (1 / 2) * h,
             y_old + (1 / 2) * k1y * h,
@@ -34,7 +38,6 @@ def runge_kutta_4th_order_method(y0: float, z0: float, h: float, n: int):
             z_old + (1 / 2) * k1z * h,
         )
 
-        # k3
         k3y = f(
             x_old + (1 / 2) * h,
             y_old + (1 / 2) * k2y * h,
@@ -46,7 +49,6 @@ def runge_kutta_4th_order_method(y0: float, z0: float, h: float, n: int):
             z_old + (1 / 2) * k2z * h,
         )
 
-        # k4
         k4y = f(
             x_old + h,
             y_old + k3y * h,
@@ -58,7 +60,7 @@ def runge_kutta_4th_order_method(y0: float, z0: float, h: float, n: int):
             z_old + k3z * h,
         )
 
-        # update
+        # Update
         x_new = x_old + h
         y_new = y_old + (1 / 6) * (k1y + 2 * k2y + 2 * k3y + k4y) * h
         z_new = z_old + (1 / 6) * (k1z + 2 * k2z + 2 * k3z + k4z) * h
@@ -72,7 +74,6 @@ def runge_kutta_4th_order_method(y0: float, z0: float, h: float, n: int):
     return xs, ys, zs
 
 
-# 초기조건 및 구간
 if __name__ == "__main__":
     y0 = 2.0
     z0 = 0.0

@@ -2,97 +2,174 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-def f(t, y, z):
-    # y' = z
+def f(t: float, y: float, z: float):
+    """
+    z = y'
+    """
     return z
 
 
-def g(t, y, z):
-    # z' = 8 - y/4
+def g(t: float, y: float, z: float):
+    """
+    z' = 8 - y/4
+    """
     return 8.0 - y / 4.0
 
 
-def rk4_ivp(y0, z0, a, b, h):
-    n = int((b - a) / h)
-    t = np.linspace(a, b, n + 1)
+def runge_kutta_4th_order_method(y0: float, z0: float, a: float, b: float, n: int):
+    h = (b - a) / n
 
-    y = np.zeros(n + 1)
-    z = np.zeros(n + 1)
+    xs = [0.0]
+    ys = [y0]
+    zs = [z0]
 
-    y[0] = y0
-    z[0] = z0
+    x_old = 0.0
+    y_old = y0
+    z_old = z0
+    for _ in range(n):
+        k1y = f(x_old, y_old, z_old)
+        k1z = g(x_old, y_old, z_old)
 
-    for i in range(n):
-        k1y = f(t[i], y[i], z[i])
-        k1z = g(t[i], y[i], z[i])
+        k2y = f(
+            x_old + (1 / 2) * h,
+            y_old + (1 / 2) * k1y * h,
+            z_old + (1 / 2) * k1z * h,
+        )
+        k2z = g(
+            x_old + (1 / 2) * h,
+            y_old + (1 / 2) * k1y * h,
+            z_old + (1 / 2) * k1z * h,
+        )
 
-        k2y = f(t[i] + h / 2, y[i] + h * k1y / 2, z[i] + h * k1z / 2)
-        k2z = g(t[i] + h / 2, y[i] + h * k1y / 2, z[i] + h * k1z / 2)
+        k3y = f(
+            x_old + (1 / 2) * h,
+            y_old + (1 / 2) * k2y * h,
+            z_old + (1 / 2) * k2z * h,
+        )
+        k3z = g(
+            x_old + (1 / 2) * h,
+            y_old + (1 / 2) * k2y * h,
+            z_old + (1 / 2) * k2z * h,
+        )
 
-        k3y = f(t[i] + h / 2, y[i] + h * k2y / 2, z[i] + h * k2z / 2)
-        k3z = g(t[i] + h / 2, y[i] + h * k2y / 2, z[i] + h * k2z / 2)
+        k4y = f(
+            x_old + h,
+            y_old + k3y * h,
+            z_old + k3z * h,
+        )
+        k4z = g(
+            x_old + h,
+            y_old + k3y * h,
+            z_old + k3z * h,
+        )
 
-        k4y = f(t[i] + h, y[i] + h * k3y, z[i] + h * k3z)
-        k4z = g(t[i] + h, y[i] + h * k3y, z[i] + h * k3z)
+        # Update
+        x_new = x_old + h
+        y_new = y_old + (1 / 6) * (k1y + 2 * k2y + 2 * k3y + k4y) * h
+        z_new = z_old + (1 / 6) * (k1z + 2 * k2z + 2 * k3z + k4z) * h
+        xs.append(x_new)
+        ys.append(y_new)
+        zs.append(z_new)
+        x_old = x_new
+        y_old = y_new
+        z_old = z_new
 
-        y[i + 1] = y[i] + (h / 6) * (k1y + 2 * k2y + 2 * k3y + k4y)
-        z[i + 1] = z[i] + (h / 6) * (k1z + 2 * k2z + 2 * k3z + k4z)
-
-    return t, y, z
+    return xs, ys, zs
 
 
-def shoot_bvp(y0, yb, a, b, h, s0, s1, tol=1e-8, max_iter=50):
-    # 첫 번째 추정
-    t, y, z = rk4_ivp(y0, s0, a, b, h)
-    F0 = y[-1] - yb
-
-    # 두 번째 추정
-    t, y, z = rk4_ivp(y0, s1, a, b, h)
-    F1 = y[-1] - yb
-
+def runge_kutta_with_shooting(
+    y0: float,
+    b: float,
+    yb: float,
+    u0: float,
+    u1: float,
+    tol=1e-8,
+    max_iter=100,
+):
     for _ in range(max_iter):
-        if abs(F1) < tol:
-            return s1, t, y, z
+        xs0, ys0, zs0 = runge_kutta_4th_order_method(y0, u0, 0.0, b, 100)
+        xs1, ys1, zs1 = runge_kutta_4th_order_method(y0, u1, 0.0, b, 100)
 
-        # secant update
-        s2 = s1 - F1 * (s1 - s0) / (F1 - F0)
+        # Check
+        if abs(ys0[-1] - yb) <= tol:
+            break
+        else:
+            u2 = u1 - (ys1[-1]) * ((u1 - u0) / (ys1[-1] - ys0[-1]))
 
-        s0, F0 = s1, F1
-        s1 = s2
+            # Update
+            u0 = u1
+            u1 = u2
+    else:
+        raise RuntimeError("수렴하지 않았습니다.")
 
-        t, y, z = rk4_ivp(y0, s1, a, b, h)
-        F1 = y[-1] - yb
-
-    raise RuntimeError("수렴하지 않았습니다.")
+    return xs0, ys0, zs0
 
 
-# 문제 설정
-a = 0.0
-b = 10.0
-h = 0.1
+def thomas_algorithm(lower, diag, upper, rhs):
+    n = len(diag)
 
-y0 = 0.0
-yb = 0.0
+    # 복사해서 원본 보존
+    a = lower.astype(float).copy()
+    b = diag.astype(float).copy()
+    c = upper.astype(float).copy()
+    d = rhs.astype(float).copy()
 
-# 초기기울기 추정값 2개
-s0 = 5.0
-s1 = 10.0
+    # forward elimination
+    for i in range(1, n):
+        w = a[i - 1] / b[i - 1]
+        b[i] = b[i] - w * c[i - 1]
+        d[i] = d[i] - w * d[i - 1]
 
-s, t, y, z = shoot_bvp(y0, yb, a, b, h, s0, s1)
+    # backward substitution
+    x = np.zeros(n)
+    x[-1] = d[-1] / b[-1]
 
-print(f"찾은 초기기울기 y'(0) = {s:.10f}")
-print(f"y(10) = {y[-1]:.10e}")
+    for i in range(n - 2, -1, -1):
+        x[i] = (d[i] - c[i] * x[i + 1]) / b[i]
 
-# # 몇 개 점 출력
-# for i in range(0, len(t), 20):
-#     print(f"t = {t[i]:6.2f}, y = {y[i]:12.6f}")
+    return x
 
-# 그래프
-plt.plot(t, y, label="y(t)")
-plt.plot(t, z, "--", label="z(t)=y'(t)")
-plt.xlabel("t")
-plt.ylabel("solution")
-plt.title(r"Solution of $y'' + \frac14 y = 8,\; y(0)=0,\; y(10)=0$")
-plt.grid(True)
-plt.legend()
-plt.show()
+
+def solve_bvp_fdm_tridiag(a, b, ya, yb, m):
+    h = (b - a) / m
+    x = np.linspace(a, b, m + 1)
+
+    n = m - 1
+
+    lower = np.ones(n - 1)
+    diag = np.full(n, -2.0 + h**2 / 4.0)
+    upper = np.ones(n - 1)
+    rhs = np.full(n, 8.0 * h**2)
+
+    # 경계조건 반영
+    rhs[0] -= ya
+    rhs[-1] -= yb
+
+    y_inner = thomas_algorithm(lower, diag, upper, rhs)
+
+    y = np.zeros(m + 1)
+    y[0] = ya
+    y[-1] = yb
+    y[1:-1] = y_inner
+
+    return x, y
+
+
+if __name__ == "__main__":
+    y0 = 0.0
+    b = 10.0
+    yb = 0.0
+    u0 = 1
+    u1 = 2
+
+    xs, ys, zs = runge_kutta_with_shooting(y0, b, yb, u0, u1)
+    x, y = solve_bvp_fdm_tridiag(0.0, b, y0, yb, 100)
+
+    plt.plot(xs, ys, c="black", lw=1, label="y(x)")
+    # plt.plot(x, y, c="dimgray", ls="--", lw=1, label="z = y'(x)")
+    plt.xlabel("x")
+    plt.xlim(xs[0], xs[-1])
+    plt.ylim(min(ys), max(ys) + 5)
+    plt.tick_params(direction="in")
+    plt.legend()
+    plt.show()

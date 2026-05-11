@@ -77,11 +77,13 @@ def runge_kutta_with_shooting(
     tol=1e-8,
     max_iter=100,
 ):
-    for _ in range(max_iter):
+    for i in range(max_iter):
         xs0, thetas0, vs0 = runge_kutta_4th_order_method(St, q0, num_grid=num_grid)
         xs1, thetas1, vs1 = runge_kutta_4th_order_method(St, q1, num_grid=num_grid)
         res0 = vs0[-1] - v1
         res1 = vs1[-1] - v1
+
+        print(f"St = {St}, iteration = {i}, residual = {res0:.3e}")
 
         # Check
         if abs(res0) <= tol:
@@ -109,6 +111,11 @@ if __name__ == "__main__":
     ax2: Axes
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
     for St in St_list:
+        print()
+        print("======================================")
+        print(f"Solving for St = {St}")
+        print("======================================")
+
         xs, thetas, vs = runge_kutta_with_shooting(q0, q1, St, num_grid=num_grid)
 
         ax1.plot(xs, thetas, label=f"St = {St}")

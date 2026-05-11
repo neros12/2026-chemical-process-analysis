@@ -50,12 +50,10 @@ def unpack_U(U, num_grid: int):
     theta = np.zeros(num_grid)
     v = np.zeros(num_grid)
 
-    # Fixed boundary values
     theta[0] = theta0
     v[0] = v0
     v[n] = v1
 
-    # Unknown values
     theta[1:] = U[:n]
     v[1:n] = U[n:]
 
@@ -124,53 +122,22 @@ def residual_vector(U, St: float, *, num_grid=100):
     return np.concatenate([R_theta, R_v])
 
 
-def secant_jacobian(U, St: float, *, num_grid=100):
-    """
-    Jacobian by secant / finite difference approximation.
-
-    J[:, j] = {R(U + eps e_j) - R(U)} / eps
-    """
+def jacobian(U, St: float, *, num_grid=100):
     size = len(U)
     J = np.zeros((size, size))
 
     R0 = residual_vector(U, St, num_grid=num_grid)
 
-    for j in range(size):
+    for i in range(size):
         dU = np.zeros(size)
-        eps = 1e-6 * max(1.0, abs(U[j]))
-        dU[j] = eps
+        eps = 1e-6 * max(1.0, abs(U[i]))
+        dU[i] = eps
 
         R1 = residual_vector(U + dU, St, num_grid=num_grid)
 
-        J[:, j] = (R1 - R0) / eps
+        J[:, i] = (R1 - R0) / eps
 
     return J
-
-
-def compute_q_from_solution(xs, thetas, vs):
-    """
-    Compute q at cell midpoints from Newton solution.
-
-    q_{i+1/2}
-    =
-    exp[k(1/theta_{i+1/2} - 1)]
-    * (1 / v_{i+1/2})
-    * (v_{i+1} - v_i) / h
-    """
-    h = xs[1] - xs[0]
-    qs = []
-
-    for i in range(len(xs) - 1):
-        theta_half = 0.5 * (thetas[i + 1] + thetas[i])
-        v_half = 0.5 * (vs[i + 1] + vs[i])
-
-        q_half = (
-            np.exp(k * (1.0 / theta_half - 1.0)) * ((vs[i + 1] - vs[i]) / h) / v_half
-        )
-
-        qs.append(float(q_half))
-
-    return np.array(qs)
 
 
 def newton_method(
@@ -179,7 +146,6 @@ def newton_method(
     num_grid=100,
     tol=1e-8,
     max_iter=30,
-    max_damping_iter=20,
 ):
     xs = np.linspace(0.0, 1.0, num_grid)
     n = num_grid - 1
@@ -204,38 +170,19 @@ def newton_method(
         ]
     )
 
-    for iteration in range(max_iter):
+    for i in range(max_iter):
         R = residual_vector(U, St, num_grid=num_grid)
         error = np.max(np.abs(R))
 
-        print(f"St = {St}, Newton iteration = {iteration}, residual = {error:.3e}")
+        print(f"St = {St}, iteration = {i}, residual = {error:.3e}")
 
         if error < tol:
             break
 
-        J = secant_jacobian(U, St, num_grid=num_grid)
+        J = jacobian(U, St, num_grid=num_grid)
 
-        delta = np.linalg.solve(J, -R)
-
-        # ----------------------------------------------------
-        # Damping
-        # ----------------------------------------------------
-        alpha = 1.0
-        for _ in range(max_damping_iter):
-            U_new = U + alpha * delta
-            R_new = residual_vector(U_new, St, num_grid=num_grid)
-
-            if np.max(np.abs(R_new)) <= error:
-                break
-
-            alpha *= 0.5
-        else:
-            raise RuntimeError("Damping did not converge.")
-
-        U = U_new
-
-        if np.max(np.abs(alpha * delta)) < tol:
-            break
+        delta = np.linalg.inv(J) @ (-R)
+        U += delta
 
     else:
         raise RuntimeError("Newton method did not converge.")
@@ -264,24 +211,6 @@ if __name__ == "__main__":
         print("======================================")
 
         xs, thetas, vs = newton_method(St, num_grid=num_grid)
-
-        qs = compute_q_from_solution(xs, thetas, vs)
-
-        print(f"theta(0) = {thetas[0]:.10f}")
-        print(f"v(0)     = {vs[0]:.10f}")
-        print(f"v(1)     = {vs[-1]:.10f}")
-        print(f"theta(1) = {thetas[-1]:.10f}")
-        print(f"q min    = {np.min(qs):.10f}")
-        print(f"q max    = {np.max(qs):.10f}")
-        print(f"q mean   = {np.mean(qs):.10f}")
-        print(f"q std    = {np.std(qs):.3e}")
-
-        results[St] = {
-            "xs": xs,
-            "thetas": thetas,
-            "vs": vs,
-            "qs": qs,
-        }
 
         ax1.plot(xs, thetas, label=f"St = {St}")
         ax1.set_xlabel("x")

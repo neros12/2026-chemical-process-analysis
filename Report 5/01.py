@@ -210,9 +210,6 @@ def solve_problem(r: float, N=300, sigma=0.0, tol=1e-10) -> tuple[float, float]:
 
     lam = eigvals[np.argmax(np.real(eigvals))]
 
-    if lam.imag < 0:
-        lam = np.conjugate(lam)
-
     return lam.real, abs(lam.imag)
 
 

@@ -1,6 +1,4 @@
 import numpy as np
-from scipy.linalg import eig
-from scipy.optimize import brentq
 
 # ============================================================
 # Linear stability analysis of isothermal Newtonian spinning
@@ -24,7 +22,7 @@ from scipy.optimize import brentq
 # ============================================================
 
 
-def spinning_eigenvalues(r, N=300):
+def solve_problem(r: float, N=300) -> tuple[float, float]:
     """
     Compute eigenvalues for a given drawdown ratio r and mesh number N.
 
@@ -44,11 +42,9 @@ def spinning_eigenvalues(r, N=300):
     dz = 1.0 / N
     z = np.linspace(0.0, 1.0, N + 1)
 
-    log_r = np.log(r)
-
     vs = r**z
-    vs_z = log_r * vs
-    vs_zz = log_r**2 * vs
+    vs_z = np.log(r) * vs
+    vs_zz = np.log(r) ** 2 * vs
 
     # Unknowns:
     # alpha_1, alpha_2, ..., alpha_N
@@ -63,15 +59,6 @@ def spinning_eigenvalues(r, N=300):
     n_total = n_alpha + n_beta
 
     A = np.zeros((n_total, n_total), dtype=float)
-    B = np.zeros((n_total, n_total), dtype=float)
-
-    def ia(i):
-        """Index of alpha_i, i = 1,...,N"""
-        return i - 1
-
-    def ib(i):
-        """Index of beta_i, i = 1,...,N-1"""
-        return n_alpha + i - 1
 
     # ------------------------------------------------------------
     # Linearized EOC:
@@ -82,41 +69,44 @@ def spinning_eigenvalues(r, N=300):
     #   + v_s_z / v_s^2 beta
     #   - 1 / v_s beta_z
     # ------------------------------------------------------------
-
     for i in range(1, N + 1):
         row = i - 1
 
         # - v_s alpha_z
         if i == N:
-            # backward difference at z = 1
-            A[row, ia(N)] += -vs[i] / dz
-            A[row, ia(N - 1)] += vs[i] / dz
+            # alpha_N index = N - 1
+            # alpha_{N-1} index = N - 2
+            A[row, N - 1] += -vs[i] / dz
+            A[row, N - 2] += vs[i] / dz
         else:
-            # central difference
+            # alpha_{i+1}
             if i + 1 <= N:
-                A[row, ia(i + 1)] += -vs[i] / (2.0 * dz)
-            if i - 1 >= 1:
-                A[row, ia(i - 1)] += vs[i] / (2.0 * dz)
+                A[row, (i + 1) - 1] += -vs[i] / (2.0 * dz)
 
-        # - v_s_z alpha
-        A[row, ia(i)] += -vs_z[i]
+            # alpha_{i-1}
+            if i - 1 >= 1:
+                A[row, (i - 1) - 1] += vs[i] / (2.0 * dz)
+
+        # - v_s_z alpha_i
+        A[row, i - 1] += -vs_z[i]
 
         # - 1 / v_s beta_z
         if i == N:
             # beta_N = 0
-            A[row, ib(N - 1)] += 1.0 / (vs[i] * dz)
+            # beta_{N-1} index = n_alpha + (N-1) - 1
+            A[row, n_alpha + N - 2] += 1.0 / (vs[i] * dz)
         else:
+            # beta_{i+1}
             if i + 1 <= N - 1:
-                A[row, ib(i + 1)] += -1.0 / (vs[i] * 2.0 * dz)
+                A[row, n_alpha + (i + 1) - 1] += -1.0 / (vs[i] * 2.0 * dz)
+
+            # beta_{i-1}
             if i - 1 >= 1:
-                A[row, ib(i - 1)] += 1.0 / (vs[i] * 2.0 * dz)
+                A[row, n_alpha + (i - 1) - 1] += 1.0 / (vs[i] * 2.0 * dz)
 
-        # + v_s_z / v_s^2 beta
+        # + v_s_z / v_s^2 beta_i
         if i <= N - 1:
-            A[row, ib(i)] += vs_z[i] / vs[i] ** 2
-
-        # RHS: lambda alpha_i
-        B[row, ia(i)] = 1.0
+            A[row, n_alpha + i - 1] += vs_z[i] / vs[i] ** 2
 
     # ------------------------------------------------------------
     # Linearized EOM:
@@ -127,112 +117,87 @@ def spinning_eigenvalues(r, N=300):
     #   - v_s_z / v_s beta_z
     #   + beta_zz
     # ------------------------------------------------------------
-
     for i in range(1, N):
         row = n_alpha + i - 1
 
-        # v_s v_s_zz alpha
-        A[row, ia(i)] += vs[i] * vs_zz[i]
+        # v_s v_s_zz alpha_i
+        A[row, i - 1] += vs[i] * vs_zz[i]
 
         # v_s v_s_z alpha_z
+        # alpha_{i+1}
         if i + 1 <= N:
-            A[row, ia(i + 1)] += vs[i] * vs_z[i] / (2.0 * dz)
+            A[row, (i + 1) - 1] += vs[i] * vs_z[i] / (2.0 * dz)
+
+        # alpha_{i-1}
         if i - 1 >= 1:
-            A[row, ia(i - 1)] += -vs[i] * vs_z[i] / (2.0 * dz)
+            A[row, (i - 1) - 1] += -vs[i] * vs_z[i] / (2.0 * dz)
 
         # beta_zz
-        A[row, ib(i)] += -2.0 / dz**2
+        # beta_i
+        A[row, n_alpha + i - 1] += -2.0 / dz**2
+
+        # beta_{i+1}
         if i + 1 <= N - 1:
-            A[row, ib(i + 1)] += 1.0 / dz**2
+            A[row, n_alpha + (i + 1) - 1] += 1.0 / dz**2
+
+        # beta_{i-1}
         if i - 1 >= 1:
-            A[row, ib(i - 1)] += 1.0 / dz**2
+            A[row, n_alpha + (i - 1) - 1] += 1.0 / dz**2
 
         # - v_s_z / v_s beta_z
         coeff = -vs_z[i] / vs[i]
 
+        # beta_{i+1}
         if i + 1 <= N - 1:
-            A[row, ib(i + 1)] += coeff / (2.0 * dz)
+            A[row, n_alpha + (i + 1) - 1] += coeff / (2.0 * dz)
+
+        # beta_{i-1}
         if i - 1 >= 1:
-            A[row, ib(i - 1)] += -coeff / (2.0 * dz)
+            A[row, n_alpha + (i - 1) - 1] += -coeff / (2.0 * dz)
 
     # Generalized eigenvalue problem:
     # A q = lambda B q
-    eigvals = eig(A, B, right=False)
+    Aaa = A[:n_alpha, :n_alpha]
+    Aab = A[:n_alpha, n_alpha:]
+    Aba = A[n_alpha:, :n_alpha]
+    Abb = A[n_alpha:, n_alpha:]
 
-    eigvals = eigvals[np.isfinite(eigvals)]
+    Aeff = Aaa - Aab @ np.linalg.inv(Abb) @ Aba
+    eigvals = np.linalg.eigvals(Aeff)
+    lam = eigvals[np.argmax(np.real(eigvals))]
 
-    return eigvals
-
-
-def leading_eigenvalue(r, N=300):
-    """
-    Return eigenvalue with largest real part.
-    """
-
-    eigvals = spinning_eigenvalues(r, N)
-
-    lam = eigvals[np.argmax(eigvals.real)]
-
-    # Report positive imaginary part
-    if lam.imag < 0:
-        lam = np.conjugate(lam)
-
-    return lam
+    return lam.real, np.abs(lam.imag)
 
 
-def critical_draw_ratio(N=300, r_left=15.0, r_right=25.0):
-    """
-    Find critical draw ratio where max(real(lambda)) = 0.
-    """
+def critical_draw_ratio(N=300, *, max_iter=100, tol=1e-6):
+    r0 = 15
+    r1 = 16
+    for _ in range(max_iter):
+        f0, _ = solve_problem(r0, N)
+        f1, _ = solve_problem(r1, N)
 
-    def growth_rate(r):
-        return leading_eigenvalue(r, N).real
+        if abs(f1) < tol:
+            return r1
 
-    return brentq(growth_rate, r_left, r_right, xtol=1e-8, rtol=1e-8)
+        r2 = r1 - f1 * (r1 - r0) / (f1 - f0)
+        r0 = r1
+        r1 = r2
+    else:
+        raise Exception("ERROR::Iteration Failed!")
 
-
-# ============================================================
-# Main calculation
-# ============================================================
 
 if __name__ == "__main__":
+    rs = [15.0, 20.0, 20.218, 22.0, 25.0]
+    N = 300
+    for r in rs:
+        real, imag = solve_problem(r, N)
+        print(f"{r:5.3f} {real:15.4f} {imag:18.3f}")
 
-    # ------------------------------------------------------------
-    # Table 1
-    # ------------------------------------------------------------
+    print()
+    print("---------------------------------------")
+    print()
 
-    r_values = [15.0, 20.0, 20.218, 22.0, 25.0]
-    N_table1 = 500
-
-    print("\nTable 1. Largest real and imaginary parts of eigenvalues")
-    print(f"{'r':>10s} {'real part':>15s} {'imaginary part':>18s}")
-    print("-" * 46)
-
-    for r in r_values:
-        lam = leading_eigenvalue(r, N=N_table1)
-        print(f"{r:10.3f} {lam.real:15.6f} {abs(lam.imag):18.6f}")
-
-    # ------------------------------------------------------------
-    # Table 2
-    # ------------------------------------------------------------
-
-    mesh_values = [100, 200, 300, 400, 500]
-
-    print("\nTable 2. Critical drawdown ratio with number of mesh")
-    print(f"{'Number of mesh':>18s} {'Critical draw ratio':>22s}")
-    print("-" * 44)
-
-    for N in mesh_values:
-        r_crit = critical_draw_ratio(N=N, r_left=18.0, r_right=23.0)
-        print(f"{N:18d} {r_crit:22.8f}")
-
-    # ------------------------------------------------------------
-    # Final result
-    # ------------------------------------------------------------
-
-    N_final = 500
-    r_critical = critical_draw_ratio(N=N_final, r_left=18.0, r_right=23.0)
-
-    print("\nFinal result")
-    print("-" * 30)
-    print(f"Critical drawdown ratio at N = {N_final}: {r_critical:.8f}")
+    Ns = [100, 200, 300, 400, 500, 700, 1000, 1100, 1200, 2000]
+    for N in Ns:
+        r_crit = critical_draw_ratio(N)
+        print(f"{N:4.0f} {r_crit:10.4f}")

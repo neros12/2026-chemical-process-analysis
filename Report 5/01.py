@@ -230,8 +230,6 @@ def critical_draw_ratio(N=300, sigma=1.0, *, max_iter=100, tol=1e-6):
 
 
 if __name__ == "__main__":
-    # shift value
-    # leading eigenvalue의 real part가 0 근처이므로 sigma = 0 사용
     sigma = 1.0
     rs = [15.0, 20.0, 20.218, 22.0, 25.0]
     N = 300

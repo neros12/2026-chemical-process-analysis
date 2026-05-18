@@ -1,397 +1,238 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from numpy.typing import NDArray
-from typing import TypedDict
-
-FloatArray = NDArray[np.float64]
-
-
-class History(TypedDict):
-    time: list[float]
-    A: list[FloatArray]
-    V: list[FloatArray]
-
-
-class SpinningResult(TypedDict):
-    x: FloatArray
-    A: FloatArray
-    V: FloatArray
-    time: float
-    history: History
-
+from scipy.linalg import eig
+from scipy.optimize import brentq
 
 # ============================================================
-# Tridiagonal solver: Thomas algorithm
+# Linear stability analysis of isothermal Newtonian spinning
+#
+# Dimensionless equations:
+#   a_t + (a v)_z = 0
+#   d/dz ( a v_z ) = 0
+#
+# Steady solution:
+#   v_s(z) = r^z
+#   a_s(z) = 1 / v_s(z)
+#
+# Perturbation:
+#   a(z,t) = a_s(z) + alpha(z) exp(lambda t)
+#   v(z,t) = v_s(z) + beta(z) exp(lambda t)
+#
+# Boundary conditions:
+#   alpha(0) = 0
+#   beta(0)  = 0
+#   beta(1)  = 0
 # ============================================================
-def thomas_solver(
-    lower: FloatArray,
-    diag: FloatArray,
-    upper: FloatArray,
-    rhs: FloatArray,
-) -> FloatArray:
+
+
+def spinning_eigenvalues(r, N=300):
     """
-    Solve tridiagonal matrix system.
+    Compute eigenvalues for a given drawdown ratio r and mesh number N.
 
-    lower: length n-1
-    diag : length n
-    upper: length n-1
-    rhs  : length n
-    """
-    n = len(diag)
+    Parameters
+    ----------
+    r : float
+        Drawdown ratio.
+    N : int
+        Number of mesh intervals.
 
-    a = lower.astype(float).copy()
-    b = diag.astype(float).copy()
-    c = upper.astype(float).copy()
-    d = rhs.astype(float).copy()
-
-    # Forward elimination
-    for i in range(1, n):
-        m = a[i - 1] / b[i - 1]
-        b[i] -= m * c[i - 1]
-        d[i] -= m * d[i - 1]
-
-    # Back substitution
-    x = np.zeros(n)
-    x[-1] = d[-1] / b[-1]
-
-    for i in range(n - 2, -1, -1):
-        x[i] = (d[i] - c[i] * x[i + 1]) / b[i]
-
-    return x
-
-
-# ============================================================
-# Solve EOC for A
-# ============================================================
-def solve_A(A_old: FloatArray, V: FloatArray, dx: float, dt: float) -> FloatArray:
-    """
-    Solve continuity equation:
-
-        dA/dt + d(AV)/dx = 0
-
-    using backward Euler in time and central difference in space.
-
-    Boundary:
-        A(0) = 1
+    Returns
+    -------
+    eigvals : ndarray
+        Eigenvalues lambda.
     """
 
-    N = len(A_old) - 1
+    dz = 1.0 / N
+    z = np.linspace(0.0, 1.0, N + 1)
 
-    # Unknowns: A_1, A_2, ..., A_N
-    n = N
+    log_r = np.log(r)
 
-    lower = np.zeros(n - 1)
-    diag = np.zeros(n)
-    upper = np.zeros(n - 1)
-    rhs = np.zeros(n)
+    vs = r**z
+    vs_z = log_r * vs
+    vs_zz = log_r**2 * vs
 
-    # Interior nodes: i = 1, ..., N-1
-    for i in range(1, N):
+    # Unknowns:
+    # alpha_1, alpha_2, ..., alpha_N
+    # beta_1, beta_2, ..., beta_{N-1}
+    #
+    # alpha_0 = 0
+    # beta_0 = 0
+    # beta_N = 0
+
+    n_alpha = N
+    n_beta = N - 1
+    n_total = n_alpha + n_beta
+
+    A = np.zeros((n_total, n_total), dtype=float)
+    B = np.zeros((n_total, n_total), dtype=float)
+
+    def ia(i):
+        """Index of alpha_i, i = 1,...,N"""
+        return i - 1
+
+    def ib(i):
+        """Index of beta_i, i = 1,...,N-1"""
+        return n_alpha + i - 1
+
+    # ------------------------------------------------------------
+    # Linearized EOC:
+    #
+    # lambda alpha =
+    #   - v_s alpha_z
+    #   - v_s_z alpha
+    #   + v_s_z / v_s^2 beta
+    #   - 1 / v_s beta_z
+    # ------------------------------------------------------------
+
+    for i in range(1, N + 1):
         row = i - 1
 
-        # Equation:
-        # (A_i^{n+1} - A_i^n)/dt
-        # + ((AV)_{i+1}^{n+1} - (AV)_{i-1}^{n+1}) / (2 dx) = 0
-        #
-        # Multiply by 2dx:
-        # -V_{i-1} A_{i-1}^{n+1}
-        # + (2dx/dt) A_i^{n+1}
-        # + V_{i+1} A_{i+1}^{n+1}
-        # = (2dx/dt) A_i^n
-
-        diag[row] = 2.0 * dx / dt
-        rhs[row] = 2.0 * dx / dt * A_old[i]
-
-        # A_{i-1}
-        if i - 1 == 0:
-            # A_0 = 1 is known
-            rhs[row] += V[i - 1] * 1.0
+        # - v_s alpha_z
+        if i == N:
+            # backward difference at z = 1
+            A[row, ia(N)] += -vs[i] / dz
+            A[row, ia(N - 1)] += vs[i] / dz
         else:
-            lower[row - 1] = -V[i - 1]
+            # central difference
+            if i + 1 <= N:
+                A[row, ia(i + 1)] += -vs[i] / (2.0 * dz)
+            if i - 1 >= 1:
+                A[row, ia(i - 1)] += vs[i] / (2.0 * dz)
 
-        # A_{i+1}
-        upper[row] = V[i + 1]
+        # - v_s_z alpha
+        A[row, ia(i)] += -vs_z[i]
 
-    # Last node: i = N
-    # Use backward difference for flux:
+        # - 1 / v_s beta_z
+        if i == N:
+            # beta_N = 0
+            A[row, ib(N - 1)] += 1.0 / (vs[i] * dz)
+        else:
+            if i + 1 <= N - 1:
+                A[row, ib(i + 1)] += -1.0 / (vs[i] * 2.0 * dz)
+            if i - 1 >= 1:
+                A[row, ib(i - 1)] += 1.0 / (vs[i] * 2.0 * dz)
+
+        # + v_s_z / v_s^2 beta
+        if i <= N - 1:
+            A[row, ib(i)] += vs_z[i] / vs[i] ** 2
+
+        # RHS: lambda alpha_i
+        B[row, ia(i)] = 1.0
+
+    # ------------------------------------------------------------
+    # Linearized EOM:
     #
-    # (A_N^{n+1} - A_N^n)/dt
-    # + ((AV)_N^{n+1} - (AV)_{N-1}^{n+1}) / dx = 0
-    #
-    # Multiply by dx:
-    # - V_{N-1} A_{N-1}^{n+1}
-    # + (dx/dt + V_N) A_N^{n+1}
-    # = dx/dt A_N^n
-
-    row = N - 1
-    diag[row] = dx / dt + V[N]
-    rhs[row] = dx / dt * A_old[N]
-
-    if N - 1 == 0:
-        rhs[row] += V[N - 1] * 1.0
-    else:
-        lower[row - 1] = -V[N - 1]
-
-    A_unknown = thomas_solver(lower, diag, upper, rhs)
-
-    A_new = np.zeros(N + 1)
-    A_new[0] = 1.0
-    A_new[1:] = A_unknown
-
-    return A_new
-
-
-# ============================================================
-# Solve EOM for V
-# ============================================================
-def solve_V(A: FloatArray, r: float, dx: float) -> FloatArray:
-    """
-    Solve momentum equation:
-
-        d/dx ( A dV/dx ) = 0
-
-    Expanded form:
-
-        dA/dx dV/dx + A d2V/dx2 = 0
-
-    Boundary:
-        V(0) = 1
-        V(1) = r
-    """
-
-    N = len(A) - 1
-
-    # Unknowns: V_1, V_2, ..., V_{N-1}
-    n = N - 1
-
-    lower = np.zeros(n - 1)
-    diag = np.zeros(n)
-    upper = np.zeros(n - 1)
-    rhs = np.zeros(n)
+    # 0 =
+    #   v_s v_s_zz alpha
+    #   + v_s v_s_z alpha_z
+    #   - v_s_z / v_s beta_z
+    #   + beta_zz
+    # ------------------------------------------------------------
 
     for i in range(1, N):
-        row = i - 1
+        row = n_alpha + i - 1
 
-        # dA/dx * dV/dx + A * d2V/dx2 = 0
-        #
-        # dA/dx ≈ (A_{i+1} - A_{i-1}) / (2dx)
-        # dV/dx ≈ (V_{i+1} - V_{i-1}) / (2dx)
-        # d2V/dx2 ≈ (V_{i+1} - 2V_i + V_{i-1}) / dx^2
+        # v_s v_s_zz alpha
+        A[row, ia(i)] += vs[i] * vs_zz[i]
 
-        coeff_grad = (A[i + 1] - A[i - 1]) / (4.0 * dx**2)
+        # v_s v_s_z alpha_z
+        if i + 1 <= N:
+            A[row, ia(i + 1)] += vs[i] * vs_z[i] / (2.0 * dz)
+        if i - 1 >= 1:
+            A[row, ia(i - 1)] += -vs[i] * vs_z[i] / (2.0 * dz)
 
-        c_left = A[i] / dx**2 - coeff_grad
-        c_mid = -2.0 * A[i] / dx**2
-        c_right = A[i] / dx**2 + coeff_grad
+        # beta_zz
+        A[row, ib(i)] += -2.0 / dz**2
+        if i + 1 <= N - 1:
+            A[row, ib(i + 1)] += 1.0 / dz**2
+        if i - 1 >= 1:
+            A[row, ib(i - 1)] += 1.0 / dz**2
 
-        diag[row] = c_mid
+        # - v_s_z / v_s beta_z
+        coeff = -vs_z[i] / vs[i]
 
-        # V_{i-1}
-        if i - 1 == 0:
-            # V_0 = 1
-            rhs[row] -= c_left * 1.0
-        else:
-            lower[row - 1] = c_left
+        if i + 1 <= N - 1:
+            A[row, ib(i + 1)] += coeff / (2.0 * dz)
+        if i - 1 >= 1:
+            A[row, ib(i - 1)] += -coeff / (2.0 * dz)
 
-        # V_{i+1}
-        if i + 1 == N:
-            # V_N = r
-            rhs[row] -= c_right * r
-        else:
-            upper[row] = c_right
+    # Generalized eigenvalue problem:
+    # A q = lambda B q
+    eigvals = eig(A, B, right=False)
 
-    V_inner = thomas_solver(lower, diag, upper, rhs)
+    eigvals = eigvals[np.isfinite(eigvals)]
 
-    V = np.zeros(N + 1)
-    V[0] = 1.0
-    V[N] = r
-    V[1:N] = V_inner
-
-    return V
+    return eigvals
 
 
-# ============================================================
-# Full transient solver
-# ============================================================
-def spinning_solver(
-    r_initial: float = 15.0,
-    r_final: float = 15.1,
-    N: int = 100,
-    dt: float = 1e-3,
-    t_max: float = 20.0,
-    steady_tol: float = 1e-8,
-    inner_tol: float = 1e-10,
-    max_inner_iter: int = 50,
-    save_interval: int = 100,
-) -> SpinningResult:
+def leading_eigenvalue(r, N=300):
     """
-    Transient solver for spinning process.
-
-    Initial condition:
-        A(x,0) = r_initial^(-x)
-        V(x,0) = r_initial^(x)
-
-    Then boundary condition V(1,t) is changed to r_final.
+    Return eigenvalue with largest real part.
     """
 
-    dx = 1.0 / N
-    x = np.linspace(0.0, 1.0, N + 1)
+    eigvals = spinning_eigenvalues(r, N)
 
-    # Initial steady state at r_initial
-    A = r_initial ** (-x)
-    V = r_initial**x
+    lam = eigvals[np.argmax(eigvals.real)]
 
-    # New boundary condition
-    V[0] = 1.0
-    V[-1] = r_final
+    # Report positive imaginary part
+    if lam.imag < 0:
+        lam = np.conjugate(lam)
 
-    history: History = {
-        "time": [],
-        "A": [],
-        "V": [],
-    }
+    return lam
 
-    n_steps = int(t_max / dt)
-    t = 0.0
 
-    for step in range(n_steps):
-        t = (step + 1) * dt
+def critical_draw_ratio(N=300, r_left=15.0, r_right=25.0):
+    """
+    Find critical draw ratio where max(real(lambda)) = 0.
+    """
 
-        A_prev_time = A.copy()
-        V_prev_time = V.copy()
+    def growth_rate(r):
+        return leading_eigenvalue(r, N).real
 
-        # Fixed-point iteration inside one time step
-        A_guess = A.copy()
-        V_guess = V.copy()
-
-        for inner in range(max_inner_iter):
-            A_new = solve_A(A_prev_time, V_guess, dx, dt)
-            V_new = solve_V(A_new, r_final, dx)
-
-            err_A = np.max(np.abs(A_new - A_guess))
-            err_V = np.max(np.abs(V_new - V_guess))
-            err = max(err_A, err_V)
-
-            A_guess = A_new
-            V_guess = V_new
-
-            if err < inner_tol:
-                break
-
-        A = A_guess
-        V = V_guess
-
-        # Save history
-        if step % save_interval == 0:
-            history["time"].append(t)
-            history["A"].append(A.copy())
-            history["V"].append(V.copy())
-
-        # Check steady state
-        err_time_A = np.max(np.abs(A - A_prev_time))
-        err_time_V = np.max(np.abs(V - V_prev_time))
-        err_time = max(err_time_A, err_time_V)
-
-        if err_time < steady_tol:
-            print(f"Converged at t = {t:.6f}, step = {step + 1}")
-            break
-
-    history["time"].append(t)
-    history["A"].append(A.copy())
-    history["V"].append(V.copy())
-
-    result: SpinningResult = {
-        "x": x,
-        "A": A,
-        "V": V,
-        "time": t,
-        "history": history,
-    }
-
-    return result
+    return brentq(growth_rate, r_left, r_right, xtol=1e-8, rtol=1e-8)
 
 
 # ============================================================
-# Run examples
+# Main calculation
 # ============================================================
+
 if __name__ == "__main__":
 
-    r_initial = 15.0
+    # ------------------------------------------------------------
+    # Table 1
+    # ------------------------------------------------------------
 
-    # 문제에서 요구하는 r 값으로 바꿔서 사용하면 됨
-    r_cases = [15.1, 35.0]
+    r_values = [15.0, 20.0, 20.218, 22.0, 25.0]
+    N_table1 = 500
 
-    for r_final in r_cases:
-        print("=" * 60)
-        print(f"Solving transient from r = {r_initial} to r = {r_final}")
+    print("\nTable 1. Largest real and imaginary parts of eigenvalues")
+    print(f"{'r':>10s} {'real part':>15s} {'imaginary part':>18s}")
+    print("-" * 46)
 
-        result = spinning_solver(
-            r_initial=r_initial,
-            r_final=r_final,
-            N=120,
-            dt=1e-3,
-            t_max=20.0,
-            steady_tol=1e-8,
-            inner_tol=1e-10,
-            max_inner_iter=50,
-            save_interval=500,
-        )
+    for r in r_values:
+        lam = leading_eigenvalue(r, N=N_table1)
+        print(f"{r:10.3f} {lam.real:15.6f} {abs(lam.imag):18.6f}")
 
-        x = result["x"]
-        A = result["A"]
-        V = result["V"]
+    # ------------------------------------------------------------
+    # Table 2
+    # ------------------------------------------------------------
 
-        # Analytic steady solution for comparison
-        A_exact = r_final ** (-x)
-        V_exact = r_final**x
+    mesh_values = [100, 200, 300, 400, 500]
 
-        err_A = np.max(np.abs(A - A_exact))
-        err_V = np.max(np.abs(V - V_exact))
+    print("\nTable 2. Critical drawdown ratio with number of mesh")
+    print(f"{'Number of mesh':>18s} {'Critical draw ratio':>22s}")
+    print("-" * 44)
 
-        print(f"Final time = {result['time']:.6f}")
-        print(f"max |A - A_exact| = {err_A:.6e}")
-        print(f"max |V - V_exact| = {err_V:.6e}")
+    for N in mesh_values:
+        r_crit = critical_draw_ratio(N=N, r_left=18.0, r_right=23.0)
+        print(f"{N:18d} {r_crit:22.8f}")
 
-        # Plot A
-        plt.figure()
-        plt.plot(x, A, label="Numerical A")
-        plt.plot(x, A_exact, "--", label="Exact steady A")
-        plt.xlabel("x")
-        plt.ylabel("A")
-        plt.title(f"A(x), r = {r_final}")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+    # ------------------------------------------------------------
+    # Final result
+    # ------------------------------------------------------------
 
-        # Plot V
-        plt.figure()
-        plt.plot(x, V, label="Numerical V")
-        plt.plot(x, V_exact, "--", label="Exact steady V")
-        plt.xlabel("x")
-        plt.ylabel("V")
-        plt.title(f"V(x), r = {r_final}")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+    N_final = 500
+    r_critical = critical_draw_ratio(N=N_final, r_left=18.0, r_right=23.0)
 
-        # Plot transient profiles of A
-        plt.figure()
-        for t, A_hist in zip(result["history"]["time"], result["history"]["A"]):
-            plt.plot(x, A_hist, label=f"t={t:.3f}")
-        plt.xlabel("x")
-        plt.ylabel("A")
-        plt.title(f"Transient A profiles, r = {r_final}")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
-
-        # Plot transient profiles of V
-        plt.figure()
-        for t, V_hist in zip(result["history"]["time"], result["history"]["V"]):
-            plt.plot(x, V_hist, label=f"t={t:.3f}")
-        plt.xlabel("x")
-        plt.ylabel("V")
-        plt.title(f"Transient V profiles, r = {r_final}")
-        plt.legend()
-        plt.grid(True)
-        plt.show()
+    print("\nFinal result")
+    print("-" * 30)
+    print(f"Critical drawdown ratio at N = {N_final}: {r_critical:.8f}")

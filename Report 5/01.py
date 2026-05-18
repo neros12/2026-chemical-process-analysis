@@ -17,7 +17,6 @@ import numpy as np
 #     mu = 1 / (lambda - sigma)
 #     lambda = sigma + 1 / mu
 #
-# scipy 사용 안 함
 # ============================================================
 
 

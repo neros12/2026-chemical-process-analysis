@@ -1,7 +1,4 @@
 # ============================================================
-# Frequency response of isothermal Newtonian spinning
-# FDM + Newton method
-#
 # Governing equations:
 #   a_t + (a v)_z = 0
 #   d/dz(a v_z) = 0
@@ -33,11 +30,7 @@
 #
 #   Take-up velocity:
 #       alpha(0) = 0, beta(0) = 0, beta(1) = 1
-#
-# Output:
-#   response = |alpha(1)|
 # ============================================================
-
 import numpy as np
 import matplotlib.pyplot as plt
 from numpy.typing import NDArray
@@ -72,10 +65,6 @@ def finite_difference_matrices(
     Boundary:
         one-sided second-order difference
     """
-
-    if n_grid < 4:
-        raise ValueError("n_grid must be at least 4.")
-
     z = np.linspace(0.0, 1.0, n_grid)
     dz = z[1] - z[0]
 
@@ -143,36 +132,15 @@ def build_residual_and_jacobian(
     *,
     draw_ratio: float,
     n_grid: int,
-    forcing: str,
-) -> tuple[FloatArray, FloatArray, FloatArray]:
-    """
-    Build residual form:
-
-        F(x) = J x - b = 0
-
-    Since the present linearized frequency-response equations are linear,
-    the Newton Jacobian is constant and equal to J.
-
-    Unknown vector:
-
-        x = [
-            alpha_R(0), ..., alpha_R(N),
-            alpha_I(0), ..., alpha_I(N),
-            beta_R(0),  ..., beta_R(N),
-            beta_I(0),  ..., beta_I(N)
-        ]
-    """
-
+) -> tuple[FloatArray, FloatArray]:
     z, D1, D2 = finite_difference_matrices(n_grid)
-
     vs = Vs(z, r=draw_ratio)
     vs_z = Vs_dz(z, r=draw_ratio)
 
     n = n_grid
-    size = 4 * n
 
-    J = np.zeros((size, size), dtype=float)
-    b = np.zeros(size, dtype=float)
+    J = np.zeros((4 * n_grid, 4 * n_grid))
+    b = np.zeros(4 * n_grid)
 
     # ------------------------------------------------------------
     # Fill equations at all grid points.
@@ -223,24 +191,12 @@ def build_residual_and_jacobian(
     # ------------------------------------------------------------
     # Boundary conditions
     # ------------------------------------------------------------
-    alpha0_R = 0.0
+    alpha0_R = 1.0
     alpha0_I = 0.0
     beta0_R = 0.0
     beta0_I = 0.0
     betaN_R = 0.0
     betaN_I = 0.0
-
-    if forcing == "spinneret_area":
-        alpha0_R = 1.0
-    elif forcing == "initial_velocity":
-        beta0_R = 1.0
-    elif forcing == "takeup_velocity":
-        betaN_R = 1.0
-    else:
-        raise ValueError(
-            "forcing must be one of: "
-            "'spinneret_area', 'initial_velocity', 'takeup_velocity'"
-        )
 
     def impose_bc(row: int, col: int, value: float) -> None:
         J[row, :] = 0.0
@@ -265,7 +221,7 @@ def build_residual_and_jacobian(
     # beta_I(1) = 0
     impose_bc(3 * n + (n - 1), idx_beta_I(n - 1, n), betaN_I)
 
-    return J, b, z
+    return J, b
 
 
 def newton_solve_linear_system(
@@ -273,8 +229,8 @@ def newton_solve_linear_system(
     b: FloatArray,
     *,
     tol: float = 1e-8,
-    max_iter: int = 100,
-) -> tuple[FloatArray, int, float]:
+    max_iter: int = 300,
+) -> FloatArray:
     """
     Newton method for F(x) = J x - b = 0.
 
@@ -286,15 +242,14 @@ def newton_solve_linear_system(
         J delta = -F(x)
         x_new = x + delta
     """
-
     x = np.zeros_like(b)
 
-    for iteration in range(1, max_iter + 1):
+    for _ in range(max_iter):
         residual = J @ x - b
         residual_norm = np.linalg.norm(residual, ord=np.inf)
 
         if residual_norm < tol:
-            return x, iteration - 1, residual_norm
+            return x
 
         delta = np.linalg.solve(J, -residual)
         x += delta
@@ -303,116 +258,52 @@ def newton_solve_linear_system(
         residual_norm = np.linalg.norm(residual, ord=np.inf)
 
         if residual_norm < tol:
-            return x, iteration, residual_norm
+            return x
 
-    raise RuntimeError(
-        f"Newton method did not converge within {max_iter} iterations. "
-        f"Final residual = {residual_norm:.3e}"
-    )
+    raise RuntimeError(f"Newton method did not converge within {max_iter} iterations.")
 
 
-def solve_response_at_frequency(
+def response_at_frequency(
     omega: float,
-    *,
     draw_ratio: float,
     n_grid: int,
-    forcing: str,
-    newton_tol: float = 1e-8,
 ) -> float:
-    """
-    Solve one frequency-response problem with FDM + Newton.
-
-    Return:
-        |alpha(1)|
-    """
-
-    J, b, z = build_residual_and_jacobian(
+    J, b = build_residual_and_jacobian(
         omega,
         draw_ratio=draw_ratio,
         n_grid=n_grid,
-        forcing=forcing,
     )
 
-    solution, n_iter, residual_norm = newton_solve_linear_system(
-        J,
-        b,
-        tol=newton_tol,
-        max_iter=100,
-    )
+    result = newton_solve_linear_system(J, b)
 
-    n = n_grid
+    alpha_R_end: float = result[idx_alpha_R(n_grid - 1, n_grid)]
+    alpha_I_end: float = result[idx_alpha_I(n_grid - 1, n_grid)]
 
-    alpha_R_end = solution[idx_alpha_R(n - 1, n)]
-    alpha_I_end = solution[idx_alpha_I(n - 1, n)]
-
-    response = np.hypot(alpha_R_end, alpha_I_end)
-
-    return float(response)
-
-
-def frequency_response(
-    *,
-    draw_ratio: float = 25.0,
-    n_points: int = 140,
-    n_grid: int = 100,
-) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
-    frequencies = np.logspace(0.0, 4.0, n_points)
-
-    spinneret_area = np.empty_like(frequencies)
-    initial_velocity = np.empty_like(frequencies)
-    takeup_velocity = np.empty_like(frequencies)
-
-    for i, omega in enumerate(frequencies):
-        spinneret_area[i] = solve_response_at_frequency(
-            float(omega),
-            draw_ratio=draw_ratio,
-            n_grid=n_grid,
-            forcing="spinneret_area",
-        )
-
-        initial_velocity[i] = solve_response_at_frequency(
-            float(omega),
-            draw_ratio=draw_ratio,
-            n_grid=n_grid,
-            forcing="initial_velocity",
-        )
-
-        takeup_velocity[i] = solve_response_at_frequency(
-            float(omega),
-            draw_ratio=draw_ratio,
-            n_grid=n_grid,
-            forcing="takeup_velocity",
-        )
-
-    return frequencies, spinneret_area, initial_velocity, takeup_velocity
+    return (alpha_R_end**2 + alpha_I_end**2) ** 0.5
 
 
 if __name__ == "__main__":
+    n_grid = 100
     draw_ratio = 25.0
 
-    # This model is Re = 0.
-    # The variable is kept only for the plot title.
-    reynolds = 0.0
-
-    frequencies, spinneret_area, initial_velocity, takeup_velocity = frequency_response(
-        draw_ratio=draw_ratio,
-        n_points=140,
-    )
+    frequencies = np.logspace(0.0, 2.0, 100)
+    spinneret_area = np.empty_like(frequencies)
+    for i, omega in enumerate(frequencies):
+        spinneret_area[i] = response_at_frequency(
+            float(omega),
+            draw_ratio=draw_ratio,
+            n_grid=n_grid,
+        )
 
     # ============================================================
     # Plot
     # ============================================================
-    fig, ax = plt.subplots(figsize=(6.0, 5.2))
-    ax.loglog(frequencies, spinneret_area, "k-.", lw=1.4, label="Spinneret area")
-    ax.loglog(frequencies, initial_velocity, "k--", lw=1.4, label="Initial velocity")
-    ax.loglog(frequencies, takeup_velocity, "k-", lw=1.4, label="Take-up velocity")
-
-    ax.set_xlim(1.0, 1.0e4)
+    fig, ax = plt.subplots()
+    ax.loglog(frequencies, spinneret_area, c="black", lw=0.7)
+    ax.set_xlim(1.0, 1.0e2)
     ax.set_ylim(1.0e-1, 1.0e2)
     ax.set_xlabel("Frequency")
-    ax.set_ylabel("Response of take-up area")
     ax.tick_params(direction="in", which="both", top=True, right=True)
-    ax.legend()
     fig.tight_layout()
-    plt.title(f"r={draw_ratio:g}")
+    plt.title(f"r={draw_ratio:g}  Spinneret area response")
     plt.show()

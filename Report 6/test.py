@@ -198,28 +198,35 @@ def build_residual_and_jacobian(
     betaN_R = 0.0
     betaN_I = 0.0
 
-    def impose_bc(row: int, col: int, value: float) -> None:
-        J[row, :] = 0.0
-        J[row, col] = 1.0
-        b[row] = value
+    # alpha_R(0) = alpha0_R
+    J[0, :] = 0.0
+    J[0, idx_alpha_R(0, n)] = 1.0
+    b[0] = alpha0_R
 
-    # alpha_R(0) = prescribed
-    impose_bc(0, idx_alpha_R(0, n), alpha0_R)
+    # alpha_I(0) = alpha0_I
+    J[n, :] = 0.0
+    J[n, idx_alpha_I(0, n)] = 1.0
+    b[n] = alpha0_I
 
-    # alpha_I(0) = 0
-    impose_bc(n, idx_alpha_I(0, n), alpha0_I)
+    # beta_R(0) = beta0_R
+    J[2 * n, :] = 0.0
+    J[2 * n, idx_beta_R(0, n)] = 1.0
+    b[2 * n] = beta0_R
 
-    # beta_R(0) = prescribed
-    impose_bc(2 * n, idx_beta_R(0, n), beta0_R)
+    # beta_I(0) = beta0_I
+    J[3 * n, :] = 0.0
+    J[3 * n, idx_beta_I(0, n)] = 1.0
+    b[3 * n] = beta0_I
 
-    # beta_I(0) = 0
-    impose_bc(3 * n, idx_beta_I(0, n), beta0_I)
+    # beta_R(n - 1) = betaN_R
+    J[2 * n + (n - 1), :] = 0.0
+    J[2 * n + (n - 1), idx_beta_R(n - 1, n)] = 1.0
+    b[2 * n + (n - 1)] = betaN_R
 
-    # beta_R(1) = prescribed
-    impose_bc(2 * n + (n - 1), idx_beta_R(n - 1, n), betaN_R)
-
-    # beta_I(1) = 0
-    impose_bc(3 * n + (n - 1), idx_beta_I(n - 1, n), betaN_I)
+    # beta_I(n - 1) = betaN_I
+    J[3 * n + (n - 1), :] = 0.0
+    J[3 * n + (n - 1), idx_beta_I(n - 1, n)] = 1.0
+    b[3 * n + (n - 1)] = betaN_I
 
     return J, b
 

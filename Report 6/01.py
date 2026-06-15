@@ -1,272 +1,310 @@
 # ============================================================
-# Linear stability analysis of isothermal Newtonian spinning
-#
-# Dimensionless equations:
+# Governing equations:
 #   a_t + (a v)_z = 0
-#   d/dz ( a v_z ) = 0
+#   d/dz(a v_z) = 0
 #
 # Steady solution:
 #   v_s(z) = r^z
-#   a_s(z) = 1 / v_s(z)
+#   a_s(z) = r^(-z)
 #
-# Perturbation:
-#   a(z,t) = a_s(z) + alpha(z) exp(lambda t)
-#   v(z,t) = v_s(z) + beta(z) exp(lambda t)
+# Relative sinusoidal perturbation:
+#   a(t,z) = a_s(z) [1 + alpha(z) exp(i omega t)]
+#   v(t,z) = v_s(z) [1 + beta(z) exp(i omega t)]
 #
-# Boundary conditions:
-#   alpha(0) = 0
-#   beta(0)  = 0
-#   beta(1)  = 0
+# Linearized frequency-domain equations:
+#   i omega alpha + v_s alpha_z + v_s beta_z = 0
+#   v_s' alpha_z + v_s' beta_z + v_s beta_zz = 0
+#
+# Split into real and imaginary parts:
+#   v_s alpha_R' - omega alpha_I + v_s beta_R' = 0
+#   omega alpha_R + v_s alpha_I' + v_s beta_I' = 0
+#   v_s' alpha_R' + v_s' beta_R' + v_s beta_R'' = 0
+#   v_s' alpha_I' + v_s' beta_I' + v_s beta_I'' = 0
+#
+# Boundary forcing cases:
+#   Spinneret area:
+#       alpha(0) = 1, beta(0) = 0, beta(1) = 0
+#
+#   Initial velocity:
+#       alpha(0) = 0, beta(0) = 1, beta(1) = 0
+#
+#   Take-up velocity:
+#       alpha(0) = 0, beta(0) = 0, beta(1) = 1
 # ============================================================
-
-from typing import Callable
-
 import numpy as np
 import matplotlib.pyplot as plt
 from numpy.typing import NDArray
 
-NumpyArray = NDArray[np.float64]
 FloatArray = NDArray[np.float64]
-SteadyValues = tuple[float, float, float]
-ResponsePair = tuple[float, float]
-ResponseParts = tuple[ResponsePair, ResponsePair, ResponsePair]
 
 
-def Vs(z: NumpyArray, *, r=25.0) -> NumpyArray:
+def Vs(z: FloatArray, *, r: float = 25.0) -> FloatArray:
     return r**z
 
 
-def Vs_dz(z: NumpyArray, *, r=25.0) -> NumpyArray:
+def Vs_dz(z: FloatArray, *, r: float = 25.0) -> FloatArray:
     return np.log(r) * r**z
 
 
-def As(z: NumpyArray, *, r=25.0) -> NumpyArray:
-    return 1 / r**z
+def As(z: FloatArray, *, r: float = 25.0) -> FloatArray:
+    return 1.0 / r**z
 
 
-def secant_method(
-    f: Callable[[float], float],
-    x0: float,
-    x1: float,
+def finite_difference_matrices(
+    n_grid: int,
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """
+    Uniform finite difference grid on z in [0, 1].
+
+    D1: first derivative matrix
+    D2: second derivative matrix
+
+    Interior:
+        central difference
+
+    Boundary:
+        one-sided second-order difference
+    """
+    z = np.linspace(0.0, 1.0, n_grid)
+    dz = z[1] - z[0]
+
+    D1 = np.zeros((n_grid, n_grid), dtype=float)
+    D2 = np.zeros((n_grid, n_grid), dtype=float)
+
+    # ------------------------------------------------------------
+    # First derivative
+    # ------------------------------------------------------------
+    for i in range(1, n_grid - 1):
+        D1[i, i - 1] = -0.5 / dz
+        D1[i, i + 1] = 0.5 / dz
+
+    # z = 0, one-sided
+    D1[0, 0] = -3.0 / (2.0 * dz)
+    D1[0, 1] = 4.0 / (2.0 * dz)
+    D1[0, 2] = -1.0 / (2.0 * dz)
+
+    # z = 1, one-sided
+    D1[-1, -3] = 1.0 / (2.0 * dz)
+    D1[-1, -2] = -4.0 / (2.0 * dz)
+    D1[-1, -1] = 3.0 / (2.0 * dz)
+
+    # ------------------------------------------------------------
+    # Second derivative
+    # ------------------------------------------------------------
+    for i in range(1, n_grid - 1):
+        D2[i, i - 1] = 1.0 / dz**2
+        D2[i, i] = -2.0 / dz**2
+        D2[i, i + 1] = 1.0 / dz**2
+
+    # z = 0, one-sided
+    D2[0, 0] = 2.0 / dz**2
+    D2[0, 1] = -5.0 / dz**2
+    D2[0, 2] = 4.0 / dz**2
+    D2[0, 3] = -1.0 / dz**2
+
+    # z = 1, one-sided
+    D2[-1, -4] = -1.0 / dz**2
+    D2[-1, -3] = 4.0 / dz**2
+    D2[-1, -2] = -5.0 / dz**2
+    D2[-1, -1] = 2.0 / dz**2
+
+    return z, D1, D2
+
+
+def idx_alpha_R(i: int, n: int) -> int:
+    return i
+
+
+def idx_alpha_I(i: int, n: int) -> int:
+    return n + i
+
+
+def idx_beta_R(i: int, n: int) -> int:
+    return 2 * n + i
+
+
+def idx_beta_I(i: int, n: int) -> int:
+    return 3 * n + i
+
+
+def get_matrices(
+    omega: float,
+    *,
+    draw_ratio: float,
+    n_grid: int,
+) -> tuple[FloatArray, FloatArray]:
+    z, D1, D2 = finite_difference_matrices(n_grid)
+    vs = Vs(z, r=draw_ratio)
+    vs_z = Vs_dz(z, r=draw_ratio)
+
+    n = n_grid
+
+    J = np.zeros((4 * n_grid, 4 * n_grid))
+    b = np.zeros(4 * n_grid)
+
+    # ------------------------------------------------------------
+    # Fill equations at all grid points.
+    #
+    # Eq.1:
+    #   v_s alpha_R' - omega alpha_I + v_s beta_R' = 0
+    #
+    # Eq.2:
+    #   omega alpha_R + v_s alpha_I' + v_s beta_I' = 0
+    #
+    # Eq.3:
+    #   v_s' alpha_R' + v_s' beta_R' + v_s beta_R'' = 0
+    #
+    # Eq.4:
+    #   v_s' alpha_I' + v_s' beta_I' + v_s beta_I'' = 0
+    # ------------------------------------------------------------
+    for i in range(n):
+        row_eq1 = i
+        row_eq2 = n + i
+        row_eq3 = 2 * n + i
+        row_eq4 = 3 * n + i
+
+        for j in range(n):
+            # Eq.1
+            J[row_eq1, idx_alpha_R(j, n)] += vs[i] * D1[i, j]
+            J[row_eq1, idx_beta_R(j, n)] += vs[i] * D1[i, j]
+
+            # Eq.2
+            J[row_eq2, idx_alpha_I(j, n)] += vs[i] * D1[i, j]
+            J[row_eq2, idx_beta_I(j, n)] += vs[i] * D1[i, j]
+
+            # Eq.3
+            J[row_eq3, idx_alpha_R(j, n)] += vs_z[i] * D1[i, j]
+            J[row_eq3, idx_beta_R(j, n)] += vs_z[i] * D1[i, j]
+            J[row_eq3, idx_beta_R(j, n)] += vs[i] * D2[i, j]
+
+            # Eq.4
+            J[row_eq4, idx_alpha_I(j, n)] += vs_z[i] * D1[i, j]
+            J[row_eq4, idx_beta_I(j, n)] += vs_z[i] * D1[i, j]
+            J[row_eq4, idx_beta_I(j, n)] += vs[i] * D2[i, j]
+
+        # Eq.1 omega term
+        J[row_eq1, idx_alpha_I(i, n)] += -omega
+
+        # Eq.2 omega term
+        J[row_eq2, idx_alpha_R(i, n)] += omega
+
+    # ------------------------------------------------------------
+    # Boundary conditions
+    # ------------------------------------------------------------
+    alpha0_R = 1.0
+    alpha0_I = 0.0
+    beta0_R = 0.0
+    beta0_I = 0.0
+    betaN_R = 0.0
+    betaN_I = 0.0
+
+    # alpha_R(0) = alpha0_R
+    J[0, :] = 0.0
+    J[0, idx_alpha_R(0, n)] = 1.0
+    b[0] = alpha0_R
+
+    # alpha_I(0) = alpha0_I
+    J[n, :] = 0.0
+    J[n, idx_alpha_I(0, n)] = 1.0
+    b[n] = alpha0_I
+
+    # beta_R(0) = beta0_R
+    J[2 * n, :] = 0.0
+    J[2 * n, idx_beta_R(0, n)] = 1.0
+    b[2 * n] = beta0_R
+
+    # beta_I(0) = beta0_I
+    J[3 * n, :] = 0.0
+    J[3 * n, idx_beta_I(0, n)] = 1.0
+    b[3 * n] = beta0_I
+
+    # beta_R(n - 1) = betaN_R
+    J[2 * n + (n - 1), :] = 0.0
+    J[2 * n + (n - 1), idx_beta_R(n - 1, n)] = 1.0
+    b[2 * n + (n - 1)] = betaN_R
+
+    # beta_I(n - 1) = betaN_I
+    J[3 * n + (n - 1), :] = 0.0
+    J[3 * n + (n - 1), idx_beta_I(n - 1, n)] = 1.0
+    b[3 * n + (n - 1)] = betaN_I
+
+    return J, b
+
+
+def newton_method(
+    J: FloatArray,
+    b: FloatArray,
     *,
     tol: float = 1e-8,
-    max_iter: int = 100,
-) -> float:
-    f0 = f(x0)
-    f1 = f(x1)
+    max_iter: int = 300,
+) -> FloatArray:
+    """
+    Newton method for F(x) = J x - b = 0.
+
+    For this problem, F is linear, so Newton converges in one iteration
+    up to numerical precision.
+
+    Newton update:
+
+        J delta = -F(x)
+        x_new = x + delta
+    """
+    x = np.zeros_like(b)
 
     for _ in range(max_iter):
-        if abs(f1) < tol:
-            return x1
+        residual = J @ x - b
+        residual_norm = np.linalg.norm(residual, ord=np.inf)
 
-        x2 = x1 - f1 * (x1 - x0) / (f1 - f0)
-        f2 = f(x2)
+        if residual_norm < tol:
+            return x
 
-        x0 = x1
-        f0 = f1
-        x1 = x2
-        f1 = f2
+        delta = np.linalg.solve(J, -residual)
+        x += delta
 
-    raise RuntimeError(f"ERROR:: 최대 iteration({max_iter}) 안에 수렴하지 못했습니다!")
+    raise RuntimeError(f"ERROR:: 수렴 실패")
 
 
-def steady_shooting_constant(draw_ratio: float, reynolds: float) -> float:
-    """
-    Return q for V' = q V + Re V^2 with V(0)=1, V(1)=draw_ratio.
-    """
-
-    if abs(reynolds) < 1e-14:
-        return float(np.log(draw_ratio))
-
-    def residual(q: float) -> float:
-        return (1.0 + reynolds / q) * np.exp(-q) - reynolds / q - 1.0 / draw_ratio
-
-    return secant_method(residual, np.log(draw_ratio), 1.2 * np.log(draw_ratio))
-
-
-def steady_velocity(
-    x: float, draw_ratio: float, reynolds: float, q: float
-) -> SteadyValues:
-    if abs(reynolds) < 1e-14:
-        velocity = draw_ratio**x
-        velocity_x = np.log(draw_ratio) * velocity
-    else:
-        inverse_velocity = (1.0 + reynolds / q) * np.exp(-q * x) - reynolds / q
-        velocity = 1.0 / inverse_velocity
-        velocity_x = q * velocity + reynolds * velocity**2
-
-    log_velocity_x = velocity_x / velocity
-    return float(velocity), float(velocity_x), float(log_velocity_x)
-
-
-def transit_time(
-    draw_ratio: float, reynolds: float, q: float, *, n_grid: int = 5001
+def response_at_frequency(
+    omega: float,
+    draw_ratio: float,
+    n_grid: int,
 ) -> float:
-    xs = np.linspace(0.0, 1.0, n_grid)
-    inverse_velocity = np.empty_like(xs)
-    for i, x in enumerate(xs):
-        velocity, _, _ = steady_velocity(float(x), draw_ratio, reynolds, q)
-        inverse_velocity[i] = 1.0 / velocity
-
-    return float(np.trapezoid(inverse_velocity, xs))
-
-
-def system_matrix(
-    x: float,
-    omega: float,
-    draw_ratio: float,
-    reynolds: float,
-    q: float,
-) -> FloatArray:
-    velocity, velocity_x, log_velocity_x = steady_velocity(x, draw_ratio, reynolds, q)
-    omega_over_velocity = omega / velocity
-    log_velocity_omega_over_velocity = log_velocity_x * omega_over_velocity
-
-    return np.array(
-        [
-            [0.0, omega_over_velocity, 0.0, 0.0, -1.0, 0.0],
-            [-omega_over_velocity, 0.0, 0.0, 0.0, 0.0, -1.0],
-            [0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-            [
-                0.0,
-                -log_velocity_omega_over_velocity,
-                reynolds * velocity_x,
-                -reynolds * omega,
-                reynolds * velocity,
-                0.0,
-            ],
-            [
-                log_velocity_omega_over_velocity,
-                0.0,
-                reynolds * omega,
-                reynolds * velocity_x,
-                0.0,
-                reynolds * velocity,
-            ],
-        ],
-        dtype=float,
+    J, b = get_matrices(
+        omega,
+        draw_ratio=draw_ratio,
+        n_grid=n_grid,
     )
 
+    result = newton_method(J, b)
 
-def integrate_basis_solutions(
-    omega: float,
-    draw_ratio: float,
-    reynolds: float,
-    q: float,
-    total_transit_time: float,
-    *,
-    points_per_cycle: int = 40,
-    min_steps: int = 700,
-) -> FloatArray:
-    phase = abs(omega) * total_transit_time
-    n_steps = max(min_steps, int(np.ceil(points_per_cycle * phase / (2.0 * np.pi))))
-    h = 1.0 / n_steps
+    alpha_R_end: float = result[idx_alpha_R(n_grid - 1, n_grid)]
+    alpha_I_end: float = result[idx_alpha_I(n_grid - 1, n_grid)]
 
-    y = np.eye(6, dtype=float)
-    x = 0.0
-    for _ in range(n_steps):
-        k1 = system_matrix(x, omega, draw_ratio, reynolds, q) @ y
-        k2 = system_matrix(x + 0.5 * h, omega, draw_ratio, reynolds, q) @ (
-            y + 0.5 * h * k1
-        )
-        k3 = system_matrix(x + 0.5 * h, omega, draw_ratio, reynolds, q) @ (
-            y + 0.5 * h * k2
-        )
-        k4 = system_matrix(x + h, omega, draw_ratio, reynolds, q) @ (y + h * k3)
-
-        y += h * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
-        x += h
-
-    return y
-
-
-def frequency_response_at(
-    omega: float,
-    draw_ratio: float,
-    reynolds: float,
-    q: float,
-    total_transit_time: float,
-) -> ResponseParts:
-    basis = integrate_basis_solutions(
-        omega, draw_ratio, reynolds, q, total_transit_time
-    )
-
-    def solve_for_response(
-        known_initial: FloatArray,
-        target_beta_end: ResponsePair,
-    ) -> ResponsePair:
-        known_end = basis @ known_initial
-        beta_x_sensitivity = basis[[2, 3], 4:6]
-        residual = np.array(target_beta_end, dtype=float) - known_end[[2, 3]]
-        beta_x_initial = np.linalg.solve(beta_x_sensitivity, residual)
-
-        initial = known_initial.copy()
-        initial[4] = beta_x_initial[0]
-        initial[5] = beta_x_initial[1]
-        end = basis @ initial
-
-        return float(end[0]), float(end[1])
-
-    spinneret_area_initial = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    initial_velocity_initial = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0])
-    takeup_velocity_initial = np.zeros(6, dtype=float)
-
-    spinneret_area = solve_for_response(spinneret_area_initial, (0.0, 0.0))
-    initial_velocity = solve_for_response(initial_velocity_initial, (0.0, 0.0))
-    takeup_velocity = solve_for_response(takeup_velocity_initial, (1.0, 0.0))
-
-    return spinneret_area, initial_velocity, takeup_velocity
-
-
-def frequency_response(
-    *,
-    draw_ratio: float = 25.0,
-    reynolds: float = 0.05,
-    n_points: int = 140,
-) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
-    frequencies = np.logspace(0.0, 4.0, n_points)
-    q = steady_shooting_constant(draw_ratio, reynolds)
-    total_transit_time = transit_time(draw_ratio, reynolds, q)
-
-    spinneret_area = np.empty_like(frequencies)
-    initial_velocity = np.empty_like(frequencies)
-    takeup_velocity = np.empty_like(frequencies)
-
-    for i, omega in enumerate(frequencies):
-        area, initial, takeup = frequency_response_at(
-            float(omega), draw_ratio, reynolds, q, total_transit_time
-        )
-        spinneret_area[i] = np.hypot(*area)
-        initial_velocity[i] = np.hypot(*initial)
-        takeup_velocity[i] = np.hypot(*takeup)
-
-    return frequencies, spinneret_area, initial_velocity, takeup_velocity
+    return (alpha_R_end**2 + alpha_I_end**2) ** 0.5
 
 
 if __name__ == "__main__":
+    n_grid = 100
     draw_ratio = 25.0
-    reynolds = 0.05
 
-    frequencies, spinneret_area, initial_velocity, takeup_velocity = frequency_response(
-        draw_ratio=draw_ratio,
-        reynolds=reynolds,
-    )
+    frequencies = np.logspace(0.0, 2.0, 100)
+    spinneret_area = np.zeros_like(frequencies)
+    for i, omega in enumerate(frequencies):
+        spinneret_area[i] = response_at_frequency(
+            float(omega),
+            draw_ratio=draw_ratio,
+            n_grid=n_grid,
+        )
 
     # ============================================================
     # Plot
     # ============================================================
-    fig, ax = plt.subplots(figsize=(6.0, 5.2))
-    ax.loglog(frequencies, spinneret_area, "k-.", lw=1.4, label="Spinneret area")
-    ax.loglog(frequencies, initial_velocity, "k--", lw=1.4, label="Initial velocity")
-    ax.loglog(frequencies, takeup_velocity, "k-", lw=1.4, label="Take-up velocity")
-
-    ax.set_xlim(1.0, 1.0e4)
+    fig, ax = plt.subplots()
+    ax.loglog(frequencies, spinneret_area, c="black", lw=0.7)
+    ax.set_xlim(1.0, 1.0e2)
     ax.set_ylim(1.0e-1, 1.0e2)
     ax.set_xlabel("Frequency")
-    ax.set_ylabel("Response of take-up area")
     ax.tick_params(direction="in", which="both", top=True, right=True)
-    ax.legend()
     fig.tight_layout()
-    plt.title(f"Re={reynolds:g}, r={draw_ratio:g}")
+    plt.title(f"r={draw_ratio:g}  Spinneret area response")
     plt.show()
